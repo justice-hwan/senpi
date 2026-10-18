@@ -8,6 +8,7 @@ import {
 	createAssistantMessageEventStream,
 	type Model,
 	normalizeContext,
+	type ProviderRequestProvenance,
 	type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { KIMI_CODE_RETRY_PROFILE } from "@earendil-works/pi-ai/utils/retry-profile/profiles";
@@ -35,6 +36,27 @@ describe("createAgentSession stream options", () => {
 		}));
 		const modelRegistry = await createModelRegistry(authStorage, join(agentDir, "models.json"));
 		const attempts: string[] = [];
+		const hooks: { type: string; provenance: ProviderRequestProvenance | undefined }[] = [];
+		const responses: unknown[] = [];
+		const resourceLoader = new DefaultResourceLoader({
+			cwd,
+			agentDir,
+			extensionFactories: [
+				(pi) => {
+					const record = (event: { type: string; provenance?: ProviderRequestProvenance }) => {
+						hooks.push({ type: event.type, provenance: event.provenance });
+					};
+					pi.on("before_provider_headers", record);
+					pi.on("before_provider_request", record);
+					pi.on("after_provider_response", record);
+					pi.on("provider_stream_event", (event) => {
+						record(event);
+						responses.push(event.data);
+					});
+				},
+			],
+		});
+		await resourceLoader.reload();
 		modelRegistry.registerProvider(model.provider, {
 			api: model.api,
 			streamSimple: (_model, _context, options) => {
@@ -60,18 +82,26 @@ describe("createAgentSession stream options", () => {
 						timestamp: Date.now(),
 					},
 				} satisfies AssistantMessageEvent;
-				if (attempts.length === 1) {
-					stream.push(structuredClone(startEvent));
-					throw Object.assign(new Error("401 unauthorized"), { status: 401 });
-				}
+				const attempt = attempts.length;
 				// Real providers emit events after the stream is returned and finish
 				// with a terminal "done" event; the runtime derives the final message
 				// from that event, never from a bare end() call.
 				const { message } = createDoneStream(model.api);
-				queueMicrotask(() => {
+				void (async () => {
+					await options?.onPayload?.({ model: model.id }, model);
+					await options?.onResponse?.({ status: attempt === 1 ? 401 : 200, headers: {} }, model);
+					await options?.onProviderStreamEvent?.({ response: { id: `response-${attempt}` } }, model);
 					stream.push(structuredClone(startEvent));
-					stream.push({ type: "done", reason: "stop", message });
-				});
+					if (attempt === 1) {
+						stream.push({
+							type: "error",
+							reason: "error",
+							error: { ...message, stopReason: "error", errorMessage: "401 unauthorized" },
+						});
+					} else {
+						stream.push({ type: "done", reason: "stop", message });
+					}
+				})();
 				return stream;
 			},
 		});
@@ -80,6 +110,7 @@ describe("createAgentSession stream options", () => {
 			agentDir,
 			model,
 			modelRuntime: getModelRuntime(modelRegistry),
+			resourceLoader,
 			settingsManager: SettingsManager.inMemory({}),
 			sessionManager: SessionManager.inMemory(cwd),
 		});
@@ -90,6 +121,35 @@ describe("createAgentSession stream options", () => {
 		}
 		expect(attempts).toHaveLength(2);
 		expect(new Set(attempts).size).toBe(2);
+		expect(hooks.map((hook) => hook.type)).toEqual(
+			Array.from({ length: 2 }, () => [
+				"before_provider_headers",
+				"before_provider_request",
+				"after_provider_response",
+				"provider_stream_event",
+			]).flat(),
+		);
+		const first = hooks[0].provenance;
+		const second = hooks[4].provenance;
+		expect(first).toEqual({
+			requestId: expect.any(String),
+			attemptId: expect.any(String),
+			failoverIndex: 0,
+			slot: { lane: "stored", name: attempts[0] },
+		});
+		expect(second).toEqual({
+			requestId: first?.requestId,
+			attemptId: expect.any(String),
+			failoverIndex: 1,
+			slot: { lane: "stored", name: attempts[1] },
+		});
+		expect(second?.attemptId).not.toBe(first?.attemptId);
+		for (const [index, hook] of hooks.entries()) {
+			expect(hook.provenance).toBe(index < 4 ? first : second);
+			expect(Object.isFrozen(hook.provenance)).toBe(true);
+			expect(Object.isFrozen(hook.provenance?.slot)).toBe(true);
+		}
+		expect(responses).toEqual([{ response: { id: "response-1" } }, { response: { id: "response-2" } }]);
 	});
 	let tempDir: string;
 	let cwd: string;
@@ -357,6 +417,11 @@ describe("createAgentSession stream options", () => {
 				provider: "capture-provider",
 				api: "openai-completions",
 				model: "capture-model",
+				provenance: {
+					requestId: expect.any(String),
+					attemptId: expect.any(String),
+					failoverIndex: 0,
+				},
 			},
 		]);
 	});

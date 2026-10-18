@@ -1,3 +1,21 @@
+## 2026-10-18 - Optional provenance on provider hooks
+
+### What changed
+
+`packages/coding-agent/src/core/extensions/types.ts` adds optional `provenance` to the header, payload, response, and raw stream events. `packages/coding-agent/src/core/extensions/runner.ts` forwards the snapshot through header preparation and payload dispatch.
+
+### Why
+
+Extensions can attribute usage to a runtime-selected credential slot without reading credential storage or relying on the last session account.
+
+### Why an extension could not handle it
+
+The public event types and runner own this boundary; extension code cannot reconstruct per-attempt selection or safely correlate concurrent calls.
+
+### Expected merge conflict zones
+
+Provider event declarations and `ProviderRequestPreparation` in `types.ts`; `prepareProviderRequest`, `emitBeforeProviderRequest`, and `emitBeforeProviderHeaders` in `runner.ts`. Existing handlers remain valid because the metadata is optional.
+
 ## 2026-10-16 - ProviderConfig declares ambient api-key auth (senpi#2327)
 
 ### What changed

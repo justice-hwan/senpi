@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import {
 	type AnyModel,
@@ -57,6 +58,8 @@ import {
 	type Provider,
 	type ProviderHeaders,
 	type ProviderRequestOptions,
+	type ProviderRequestProvenance,
+	type ProviderResponse,
 	providerNotConfiguredMessage,
 	type SimpleStreamOptions,
 	type StreamOptions,
@@ -237,16 +240,65 @@ function mergeHeaders(
 	return merged;
 }
 
-function withPayloadRequestMetadata(options: StreamOptions, model: Model<Api>): StreamOptions {
-	if (!options.onPayload) return options;
-	const onPayload = options.onPayload;
+function withPayloadRequestMetadata<T extends StreamOptions>(
+	options: T,
+	model: Model<Api>,
+	provenance?: ProviderRequestProvenance,
+): T {
+	const { onPayload, onResponse, onProviderStreamEvent } = options;
 	return {
 		...options,
-		onPayload: async (payload, providerModel) =>
-			await onPayload(payload, providerModel, {
-				model,
-				headers: options.headers ?? {},
-			}),
+		...(onPayload
+			? {
+					onPayload: async (payload: unknown, providerModel: Model<Api>) =>
+						await onPayload(payload, providerModel, {
+							model,
+							headers: options.headers ?? {},
+							...(provenance ? { provenance } : {}),
+						}),
+				}
+			: {}),
+		...(provenance && onResponse
+			? {
+					onResponse: (response: ProviderResponse, providerModel: Model<Api>) =>
+						onResponse(response, providerModel, provenance),
+				}
+			: {}),
+		...(provenance && onProviderStreamEvent
+			? {
+					onProviderStreamEvent: (data: unknown, providerModel: Model<Api>) =>
+						onProviderStreamEvent(data, providerModel, provenance),
+				}
+			: {}),
+	};
+}
+
+type SelectedRequestSlot = { readonly lane: "stored" | "env"; readonly name: string };
+
+/** One closure per logical request, never a session-global "last selected account". */
+function requestAttemptProvenance(): (slot?: SelectedRequestSlot) => ProviderRequestProvenance {
+	const requestId = randomUUID();
+	let previous: SelectedRequestSlot | undefined;
+	let failoverIndex = 0;
+	return (slot) => {
+		if (previous && slot && (previous.lane !== slot.lane || previous.name !== slot.name)) failoverIndex++;
+		previous = slot && { lane: slot.lane, name: slot.name };
+		// Stored slot names are identifiers. Configured env slot names may be arbitrary:
+		// do not expose emails, URLs, token-shaped labels, or any credential material.
+		const safeName =
+			slot &&
+			/^[a-zA-Z0-9][a-zA-Z0-9_:-]{0,127}$/.test(slot.name) &&
+			!/^(?:sk[-_]|gh[pousr]_|github_pat_|xox[baprs]-)/i.test(slot.name)
+				? slot.name
+				: undefined;
+		return Object.freeze({
+			requestId,
+			attemptId: randomUUID(),
+			failoverIndex,
+			...(slot
+				? { slot: Object.freeze({ lane: slot.lane, ...(safeName === undefined ? {} : { name: safeName }) }) }
+				: {}),
+		});
 	};
 }
 
@@ -905,6 +957,7 @@ export class ModelRuntime implements Models {
 		model: TModel,
 		options: TOptions | undefined,
 		slotAuth?: { apiKey?: string; slotName?: string; rejectedAccess?: string },
+		provenance?: ProviderRequestProvenance,
 	): Promise<PreparedRequest<TModel, TOptions>> {
 		const provider = this.models.getProvider(model.provider);
 		if (!provider) throw new ModelsError("provider", `Unknown provider: ${model.provider}`);
@@ -921,7 +974,7 @@ export class ModelRuntime implements Models {
 		const providerOptions = rawProviderOptions as Omit<TOptions, "transformHeaders"> &
 			ProviderRequestOptions<TModel> & { extraBody?: Record<string, unknown> };
 		let headers = mergeHeaders(resolution.auth.headers, providerOptions.headers);
-		if (transformHeaders) headers = await transformHeaders(headers ?? {});
+		if (transformHeaders) headers = await transformHeaders(headers ?? {}, provenance);
 		// Configured compatibility (extraBody, upstream model id) applies to chat models only.
 		const compatibility: Partial<CompatibilityRequestConfig> = isModelType(model, "chat")
 			? this.getCompatibilityRequestConfig(model)
@@ -1030,6 +1083,7 @@ export class ModelRuntime implements Models {
 		const transcript = normalizeContext(context);
 		return lazyStream(model, async () => {
 			assertChatModel(model);
+			const nextAttempt = requestAttemptProvenance();
 			const streamOptions = options as CredentialRotationStreamOptions | undefined;
 			const sources = this.couldRotateCredentials(model, streamOptions)
 				? await this.credentialRotationSources(model, streamOptions)
@@ -1057,9 +1111,10 @@ export class ModelRuntime implements Models {
 								prepared.provider.stream(
 									prepared.model as Model<TApi>,
 									transcript,
-									withPayloadRequestMetadata(prepared.options, prepared.model) as ApiStreamOptions<TApi>,
+									prepared.options as ApiStreamOptions<TApi>,
 								),
 							transcript,
+							() => nextAttempt(slot),
 						),
 				});
 			}
@@ -1071,9 +1126,10 @@ export class ModelRuntime implements Models {
 					prepared.provider.stream(
 						prepared.model as Model<TApi>,
 						transcript,
-						withPayloadRequestMetadata(prepared.options, prepared.model) as ApiStreamOptions<TApi>,
+						prepared.options as ApiStreamOptions<TApi>,
 					),
 				transcript,
+				nextAttempt,
 			);
 		});
 	}
@@ -1088,16 +1144,23 @@ export class ModelRuntime implements Models {
 		slotAuth: { apiKey?: string; slotName?: string } | undefined,
 		send: (prepared: PreparedRequest<Model<Api>, TOptions>) => AssistantMessageEventStream,
 		transcript: TranscriptContext,
+		nextAttempt: () => ProviderRequestProvenance,
 	): Promise<AsyncIterable<AssistantMessageEvent>> {
 		return retryOnceOnRejectedToken(async (rejectedAccess) => {
+			const provenance = nextAttempt();
 			const prepared = await this.prepareRequest(
 				model,
 				options,
 				rejectedAccess === undefined ? slotAuth : { ...slotAuth, rejectedAccess },
+				provenance,
 			);
 			const capturing = {
 				...prepared,
-				options: withLimitCapture(prepared.options, prepared.model.provider, limitAccountOf(slotAuth)),
+				options: withLimitCapture(
+					withPayloadRequestMetadata(prepared.options, prepared.model, provenance),
+					prepared.model.provider,
+					limitAccountOf(slotAuth),
+				),
 			};
 			const inner = await this.providerSemaphores.bracket(prepared.model.provider, prepared.options.signal, () =>
 				send(capturing),
@@ -1141,6 +1204,7 @@ export class ModelRuntime implements Models {
 		}
 		return lazyStream(model, async () => {
 			assertChatModel(model);
+			const nextAttempt = requestAttemptProvenance();
 			const streamOptions = options as CredentialRotationStreamOptions | undefined;
 			const sources = this.couldRotateCredentials(model, streamOptions)
 				? await this.credentialRotationSources(model, streamOptions)
@@ -1160,9 +1224,10 @@ export class ModelRuntime implements Models {
 								prepared.provider.streamSimple(
 									prepared.model,
 									transcript,
-									withPayloadRequestMetadata(prepared.options, prepared.model) as SimpleStreamOptions,
+									prepared.options as SimpleStreamOptions,
 								),
 							transcript,
+							() => nextAttempt(slot),
 						),
 				});
 			}
@@ -1171,12 +1236,9 @@ export class ModelRuntime implements Models {
 				options,
 				undefined,
 				(prepared) =>
-					prepared.provider.streamSimple(
-						prepared.model,
-						transcript,
-						withPayloadRequestMetadata(prepared.options, prepared.model) as SimpleStreamOptions,
-					),
+					prepared.provider.streamSimple(prepared.model, transcript, prepared.options as SimpleStreamOptions),
 				transcript,
+				nextAttempt,
 			);
 		});
 	}

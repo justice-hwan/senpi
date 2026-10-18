@@ -452,7 +452,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		return modelRuntime.getCompatibilityRequestConfig(requestModel).serviceTier;
 	};
 
-	const handleProviderStreamEvent: NonNullable<SimpleStreamOptions["onProviderStreamEvent"]> = async (data, model) => {
+	const handleProviderStreamEvent: NonNullable<SimpleStreamOptions["onProviderStreamEvent"]> = async (
+		data,
+		model,
+		provenance,
+	) => {
 		const runner = extensionRunnerRef.current;
 		if (!runner?.isActive || !runner.hasHandlers("provider_stream_event")) return;
 		await runner.emit({
@@ -461,6 +465,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			provider: model.provider,
 			api: model.api,
 			model: model.id,
+			...(provenance ? { provenance } : {}),
 		});
 	};
 
@@ -506,7 +511,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				websocketConnectTimeoutMs,
 				maxRetries: options?.maxRetries ?? profileMaxRetries,
 				maxRetryDelayMs: options?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
-				transformHeaders: async (requestHeaders) => {
+				transformHeaders: async (requestHeaders, provenance) => {
 					const headers = mergeProviderAttributionHeaders(
 						model,
 						settingsManager,
@@ -514,7 +519,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 						requestHeaders,
 					);
 					return headerRunner?.isActive && headerRunner.hasHandlers("before_provider_headers")
-						? headerRunner.emitBeforeProviderHeaders(headers ?? {})
+						? headerRunner.emitBeforeProviderHeaders(headers ?? {}, provenance)
 						: (headers ?? {});
 				},
 			});
@@ -526,7 +531,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 			return runner.emitBeforeProviderRequest(payload, undefined, request);
 		},
-		onResponse: async (response, _model) => {
+		onResponse: async (response, _model, provenance) => {
 			const runner = extensionRunnerRef.current;
 			if (!runner?.isActive || !runner.hasHandlers("after_provider_response")) {
 				return;
@@ -535,6 +540,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				type: "after_provider_response",
 				status: response.status,
 				headers: response.headers,
+				...(provenance ? { provenance } : {}),
 			});
 		},
 		onProviderStreamEvent: handleProviderStreamEvent,

@@ -1,3 +1,21 @@
+## 2026-10-18 - Optional provider request provenance
+
+### What changed
+
+`packages/ai/src/types.ts` exports readonly `ProviderRequestProvenance` and optional metadata on request, response, and raw stream callbacks. `packages/ai/src/models.ts` allows the header transform to receive the same optional snapshot.
+
+### Why
+
+Consumers need to correlate usage and response IDs with individual credential attempts, including overlapping requests and failover.
+
+### Why an extension could not handle it
+
+Extensions cannot recover a selected credential attempt from provider payloads or session-global account state.
+
+### Expected merge conflict zones
+
+The request callback signatures in `types.ts` and `ModelsRequestTransforms` in `models.ts`; all additions are optional.
+
 ## 2026-10-17 - Export the provider credential env names (senpi#3531)
 
 ### What changed

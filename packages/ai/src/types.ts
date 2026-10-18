@@ -171,10 +171,24 @@ export type Transport = "sse" | "websocket" | "websocket-cached" | "auto";
 /** Provider-scoped environment overrides. Values take precedence over process.env. */
 export type ProviderEnv = Record<string, string>;
 export type ProviderHeaders = Record<string, string | null>;
+/** Local-only correlation for one runtime-owned provider attempt; never wire metadata. */
+export interface ProviderRequestProvenance {
+	readonly requestId: string;
+	readonly attemptId: string;
+	/** Zero for the first slot; incremented only when the selected slot changes. */
+	readonly failoverIndex: number;
+	/** Absent when the runtime does not own or cannot identify credential selection. */
+	readonly slot?: {
+		readonly lane: "stored" | "env";
+		/** Operational slot label, not displayName or verified identity. Unsafe labels are omitted. */
+		readonly name?: string;
+	};
+}
 /** Effective model and fully transformed headers for a request payload hook. */
 export type ProviderRequestMetadata = {
 	model: Model<Api>;
 	headers: ProviderHeaders;
+	provenance?: ProviderRequestProvenance;
 };
 export type FetchFunction = typeof globalThis.fetch;
 
@@ -233,7 +247,11 @@ export interface ProviderRequestOptions<TModel = Model<Api>> {
 	/**
 	 * Optional callback invoked after an HTTP response is received.
 	 */
-	onResponse?: (response: ProviderResponse, model: TModel) => void | Promise<void>;
+	onResponse?: (
+		response: ProviderResponse,
+		model: TModel,
+		provenance?: ProviderRequestProvenance,
+	) => void | Promise<void>;
 	/**
 	 * Optional custom HTTP headers to include in API requests.
 	 * Merged with provider defaults; caller values override default headers.
@@ -269,7 +287,11 @@ export interface StreamOptions extends ProviderRequestOptions<Model<Api>> {
 	 * Event data is adapter-owned and must be treated as read-only.
 	 * Adapter support is explicit; unsupported adapters do not invoke it.
 	 */
-	onProviderStreamEvent?: (data: unknown, model: Model<Api>) => void | Promise<void>;
+	onProviderStreamEvent?: (
+		data: unknown,
+		model: Model<Api>,
+		provenance?: ProviderRequestProvenance,
+	) => void | Promise<void>;
 	temperature?: number;
 	/**
 	 * Arbitrary sampling parameters merged into the request body as-is, after the named request

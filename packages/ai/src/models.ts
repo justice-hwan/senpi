@@ -55,6 +55,7 @@ import type {
 	ProviderHeaders,
 	ProviderImages,
 	ProviderRequestOptions,
+	ProviderRequestProvenance,
 	ProviderStreams,
 	SimpleStreamOptions,
 	ThinkingLevelMap,
@@ -123,7 +124,10 @@ export interface ModelsRefreshResult {
 
 export interface ModelsRequestTransforms {
 	/** Transform fully assembled model/auth/request headers before provider dispatch. */
-	transformHeaders?: (headers: ProviderHeaders) => ProviderHeaders | Promise<ProviderHeaders>;
+	transformHeaders?: (
+		headers: ProviderHeaders,
+		provenance?: ProviderRequestProvenance,
+	) => ProviderHeaders | Promise<ProviderHeaders>;
 }
 
 export type ModelsApiStreamOptions<TApi extends Api> = ApiStreamOptions<TApi> & ModelsRequestTransforms;

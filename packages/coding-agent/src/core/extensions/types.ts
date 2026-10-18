@@ -44,6 +44,7 @@ import type {
 	ProviderHeaders,
 	ProviderId,
 	ProviderImages,
+	ProviderRequestProvenance,
 	RefreshModelsContext,
 	SimpleStreamOptions,
 	TextContent,
@@ -664,7 +665,7 @@ export type PromptCachePrefixResult =
 export interface ProviderRequestPreparation {
 	messages: AgentMessage[];
 	transformPayload(payload: unknown): Promise<unknown>;
-	transformHeaders(headers: ProviderHeaders): Promise<ProviderHeaders>;
+	transformHeaders(headers: ProviderHeaders, provenance?: ProviderRequestProvenance): Promise<ProviderHeaders>;
 }
 
 export interface ExtensionTreeNavigationOptions {
@@ -1368,6 +1369,8 @@ export interface ContextWithSystemEvent {
 /** Fired before a provider request is sent. Can replace the payload. */
 export interface BeforeProviderRequestEvent {
 	type: "before_provider_request";
+	/** Runtime-owned attempt identity, when available; contains no credential material. */
+	provenance?: ProviderRequestProvenance;
 	payload: unknown;
 	/** Effective request model after auth/base-url/upstream-model resolution. */
 	model?: Model<Api>;
@@ -1382,12 +1385,14 @@ export interface BeforeProviderRequestEvent {
  */
 export interface BeforeProviderHeadersEvent {
 	type: "before_provider_headers";
+	provenance?: ProviderRequestProvenance;
 	headers: ProviderHeaders;
 }
 
 /** Fired after a provider response is received and before the response stream is consumed. */
 export interface AfterProviderResponseEvent {
 	type: "after_provider_response";
+	provenance?: ProviderRequestProvenance;
 	status: number;
 	headers: Record<string, string>;
 }
@@ -1395,6 +1400,7 @@ export interface AfterProviderResponseEvent {
 /** Fired for a parsed provider stream event before Pi normalizes it. */
 export interface ProviderStreamEvent {
 	type: "provider_stream_event";
+	provenance?: ProviderRequestProvenance;
 	provider: ProviderId;
 	api: Api;
 	model: string;
