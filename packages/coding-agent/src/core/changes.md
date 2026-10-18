@@ -2,7 +2,7 @@
 
 ### What changed
 
-`packages/coding-agent/src/core/model-runtime.ts` creates request-local IDs and frozen attempt snapshots from actual pool selections. Same-slot retries receive new attempt IDs without increasing the failover index. Unsafe slot labels are omitted. `packages/coding-agent/src/core/sdk.ts` carries the snapshot into existing provider hook events.
+- `packages/coding-agent/src/core/model-runtime.ts` creates request-local IDs and frozen attempt snapshots from actual pool selections. Same-slot retries receive new attempt IDs without increasing the failover index. Unsafe slot labels are omitted. `packages/coding-agent/src/core/sdk.ts` carries the snapshot into existing provider hook events.
 
 ### Why
 

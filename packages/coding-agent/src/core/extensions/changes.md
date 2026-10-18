@@ -2,7 +2,7 @@
 
 ### What changed
 
-`packages/coding-agent/src/core/extensions/types.ts` adds optional `provenance` to the header, payload, response, and raw stream events. `packages/coding-agent/src/core/extensions/runner.ts` forwards the snapshot through header preparation and payload dispatch.
+- `packages/coding-agent/src/core/extensions/types.ts` adds optional `provenance` to the header, payload, response, and raw stream events. `packages/coding-agent/src/core/extensions/runner.ts` forwards the snapshot through header preparation and payload dispatch.
 
 ### Why
 

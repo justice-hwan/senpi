@@ -2,7 +2,7 @@
 
 ### What changed
 
-`packages/ai/src/types.ts` exports readonly `ProviderRequestProvenance` and optional metadata on request, response, and raw stream callbacks. `packages/ai/src/models.ts` allows the header transform to receive the same optional snapshot.
+- `packages/ai/src/types.ts` exports readonly `ProviderRequestProvenance` and optional metadata on request, response, and raw stream callbacks. `packages/ai/src/models.ts` allows the header transform to receive the same optional snapshot.
 
 ### Why
 
